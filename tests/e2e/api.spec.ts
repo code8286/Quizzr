@@ -1,0 +1,46 @@
+import { test,expect,type APIRequestContext } from "@playwright/test";
+import { transaction } from "../../src/server/store";
+import { QUIZ_DURATION_MS } from "../../src/contracts/timing";
+import { practicePapers } from "../../scripts/practice-papers";
+async function editTestStore(fn:Parameters<typeof transaction>[0]){const storage=process.env.QUIZ_STORAGE,dir=process.env.QUIZ_DATA_DIR;process.env.QUIZ_STORAGE="local";process.env.QUIZ_DATA_DIR=".data/e2e";try{return await transaction(fn);}finally{if(storage===undefined)delete process.env.QUIZ_STORAGE;else process.env.QUIZ_STORAGE=storage;if(dir===undefined)delete process.env.QUIZ_DATA_DIR;else process.env.QUIZ_DATA_DIR=dir;}}
+test("passwordless roster flow, guided progression, tiered hints, private scores and timing",async({playwright})=>{
+ const origin="http://127.0.0.1:3100",ctx=()=>playwright.request.newContext({baseURL:origin,extraHTTPHeaders:{Origin:origin}}),admin=await ctx(),leader=await ctx();
+ const post=async(c:APIRequestContext,path:string,data:unknown,expected=200)=>{const r=await c.post(`/api/${path}`,{data});expect(r.status(),`${path}: ${await r.text()}`).toBe(expected);return r.json();};
+ await post(admin,"admin/login",{admin_username:"ADMIN",password:"TestAdmin!2026"});
+ await post(leader,"auth/signup",{registration_id:"NOTINROSTER",name:"New Leader"},403);
+ await post(leader,"auth/signup",{registration_id:"T1M7",name:"My Signup Name"});await post(leader,"auth/logout",{});
+ await post(leader,"auth/login",{registration_id:"T1M7",name:"Wrong Name"},401);await post(leader,"auth/login",{registration_id:"t1m7",name:" my  signup NAME "});
+ expect((await leader.get("/api/admin/live-dashboard")).status()).toBe(403);expect((await leader.get("/api/auth/logout")).status()).toBe(405);
+ expect((await leader.post("/api/team/register",{headers:{Origin:"https://evil.invalid"},data:{}})).status()).toBe(403);
+ const members=Array.from({length:7},(_,i)=>({name:"Does Not Match Roster",registration_number:`T1M${i+1}`}));
+ await post(leader,"team/register",{members:members.slice(0,6)},422);const registered=await post(leader,"team/register",{members});expect(registered.team.number).toBe(1);expect(registered.team.members).toHaveLength(7);
+ await post(leader,"quiz/start",{},409);await post(admin,"admin/override-set",{team_id:registered.team.id,set_id:1,reason:"Verify hint tiers"});await post(admin,"admin/toggle-paper-release",{release_status:true});
+ let status=await (await leader.get("/api/quiz/status")).json();expect(status.attempt.startedAt).toBeNull();expect(status.attempt).not.toHaveProperty("total");expect(status.attempt).not.toHaveProperty("progress");
+ await post(leader,"quiz/start",{});status=await (await leader.get("/api/quiz/status")).json();expect(status.attempt.startedAt).toBeNull();expect(status.attempt.deadlineAt).toBeNull();expect((await leader.get("/api/quiz/question?module=1")).status()).toBe(403);await post(leader,"quiz/select-module",{module:1});await post(leader,"quiz/select-module",{module:2},409);expect((await leader.get("/api/quiz/question?module=2")).status()).toBe(403);
+ let q=await (await leader.get("/api/quiz/question?module=1")).json();expect(q).not.toHaveProperty("key");expect(q.hints).toEqual([]);expect(q.hintCosts).toEqual([.5,1,2]);
+ await post(leader,"quiz/request-hint",{question_id:q.question_id,hint_index:1,confirm:true},403);
+ await editTestStore(s=>{s.attempts.find(a=>a.id===s.teams[0].attemptId)!.startedAt=Date.now()-300001;});
+ await post(leader,"quiz/request-hint",{question_id:q.question_id,hint_index:1},422);await post(leader,"quiz/request-hint",{question_id:q.question_id,hint_index:1,confirm:true});await post(leader,"quiz/request-hint",{question_id:q.question_id,hint_index:2,confirm:true});await post(leader,"quiz/request-hint",{question_id:q.question_id,hint_index:2,confirm:true});
+ const info=await (await admin.get("/api/admin/live-dashboard")).json();expect(info.teams[0].attempt.progress[0].deducted).toBe(1);
+ await post(admin,"admin/monitoring",{enabled:true,reason:"Verify focus monitor"});await post(leader,"quiz/proctor-event",{event_type:"FOCUS_LOST",details:"Test"});expect((await leader.get("/api/quiz/question?module=1")).status()).toBe(423);await post(admin,"admin/lockout-team",{team_id:registered.team.id,lock_status:false,reason:"Verified network"});await post(admin,"admin/monitoring",{enabled:false,reason:"Finish test"});
+ const visited:number[]=[];
+ for(let i=0;i<5;i++){status=await (await leader.get("/api/quiz/status")).json();const module=status.attempt.activeModule;visited.push(module);q=await (await leader.get(`/api/quiz/question?module=${module}`)).json();const p=practicePapers.find(p=>p.set===1&&p.module===module)!;await post(leader,"quiz/submit-key",{question_id:q.question_id,submitted_key:p.key});}
+ expect(new Set(visited).size).toBe(5);status=await (await leader.get("/api/quiz/status")).json();expect(status.attempt.state).toBe("completed");expect(status.attempt).not.toHaveProperty("total");expect((await leader.get("/api/quiz/result")).status()).toBe(403);
+ const report=await (await admin.get("/api/admin/export")).json();expect(report.teams[0].attempts[0].total).toBe(9);
+ await post(admin,"admin/reissue",{team_id:registered.team.id,reason:"Verify expiry",confirm_reset:true});await post(leader,"quiz/start",{});await post(leader,"quiz/select-module",{module:1});await editTestStore(s=>{s.attempts.find(a=>a.id===s.teams[0].attemptId)!.startedAt=Date.now()-QUIZ_DURATION_MS;});
+ expect((await post(leader,"quiz/submit-key",{question_id:"practice-1-1",submitted_key:"10"},409)).code).toBe("TIME_EXPIRED");expect((await (await leader.get("/api/quiz/status")).json()).attempt.completionReason).toBe("time_limit");
+ const oldAttempt=(await (await leader.get("/api/quiz/status")).json()).attempt.id;
+ await post(leader,"admin/clear-registration",{team_id:registered.team.id,attempt_id:oldAttempt,reason:"Try unauthorized reset"},403);
+ await post(admin,"admin/clear-registration",{team_id:registered.team.id,attempt_id:oldAttempt,reason:"Correct team registration"});
+ expect((await (await leader.get("/api/quiz/status")).json()).team).toBeNull();
+ expect((await (await admin.get("/api/admin/live-dashboard")).json()).teams).toHaveLength(0);
+ const archivedReport=await (await admin.get("/api/admin/export")).json();expect(archivedReport.teams[0].registrationClearedAt).toBeTruthy();expect(archivedReport.teams[0].attempts).toHaveLength(2);expect(archivedReport.teams[0].attempts[0].total).toBe(9);
+ const replacement=await ctx();await post(replacement,"auth/signup",{registration_id:"T1M1",name:"Replacement Leader"});
+ const fresh=await post(replacement,"team/register",{members});expect(fresh.team.id).toBe(registered.team.id);expect(fresh.team.number).toBe(1);expect(fresh.attempt.id).not.toBe(oldAttempt);expect(fresh.attempt.startedAt).toBeNull();
+ await post(admin,"admin/clear-registration",{team_id:registered.team.id,attempt_id:oldAttempt,reason:"Outdated admin screen"},409);
+ await post(replacement,"quiz/start",{});expect((await (await replacement.get("/api/quiz/status")).json()).attempt.startedAt).toBeNull();
+ await post(replacement,"quiz/select-module",{module:2});expect((await (await replacement.get("/api/quiz/status")).json()).attempt.startedAt).toBeTruthy();
+ await replacement.dispose();
+ const contenders=await Promise.all([ctx(),ctx()]);for(let i=0;i<2;i++)await post(contenders[i],"auth/signup",{registration_id:`T2M${i+1}`,name:"Concurrent Leader"});const registrations=await Promise.all(contenders.map(c=>c.post("/api/team/register",{data:{members:[{name:"Member One",registration_number:"T2M1"},{name:"Member Two",registration_number:"T2M2"}]}})));expect(registrations.map(r=>r.status()).sort()).toEqual([200,409]);
+ await post(leader,"auth/logout",{});expect((await leader.get("/api/quiz/status")).status()).toBe(401);for(const c of [admin,leader,...contenders])await c.dispose();
+});

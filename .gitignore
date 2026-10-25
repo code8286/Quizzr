@@ -1,0 +1,14 @@
+node_modules/
+.next/
+.next-e2e/
+.env*
+.data/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+*.log
+private-papers*.json
+.next-verify/
+.vercel/
+.devdata.txt

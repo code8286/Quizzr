@@ -1,0 +1,17 @@
+# Upload source only. Private assessment data stays on the trusted import machine.
+.git/
+.vercel/
+node_modules/
+.next*/
+.env*
+**/.env*
+.data/
+Prompts/
+docs/
+tests/
+test-results/
+playwright-report/
+coverage/
+private-papers*.json
+*.tsbuildinfo
+*.log
