@@ -2,7 +2,8 @@ import "server-only";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { NextRequest,NextResponse } from "next/server";
 import { ZodError } from "zod";
-import { transaction } from "./store";
+import { transaction, readSnapshot, recordHeartbeat } from "./store";
+import { projectReadState } from "./heartbeat";
 import { actor,clearSession,setSession } from "./session";
 import { AppError,authenticate,assert,adminCommand,adminView,getQuestion,login,signup,ownTeam,quizCommand,registerTeam,result,studentView,sweep,throttle } from "./engine";
 import type { Actor,State } from "./model";
@@ -25,7 +26,7 @@ async function body(req:NextRequest){
   const text=await req.text();assert(Buffer.byteLength(text)<=1048576,"Request is too large.",413);
   try{const data=JSON.parse(text || "{}");assert(data&&typeof data==="object"&&!Array.isArray(data),"Use a JSON object.",422);return data;}catch(e){if(e instanceof AppError)throw e;throw new AppError(422,"INVALID_JSON","Enter valid JSON.");}
 }
-export async function viewForActor(a:Actor){return transaction(s=>{const now=Date.now();sweep(s,now);const u=authenticate(s,a);return u.role==="ADMIN"?adminView(s,now):studentView(s,u,now);});}
+export async function viewForActor(a:Actor){return readSnapshot(s=>{const now=Date.now();projectReadState(s,now);const u=authenticate(s,a);return u.role==="ADMIN"?adminView(s,now):studentView(s,u,now);});}
 function routeCommand(s:State,a:Actor,path:string,method:string,data:unknown,req:NextRequest,now:number){
   const admin=path.startsWith("admin/");const u=authenticate(s,a,admin);
   if(path==="auth/logout"){u.sessionVersion++;return {ok:true};}
@@ -63,12 +64,23 @@ export async function handle(req:NextRequest,path:string){
       if(out.error)throw out.error;assert(out.session,"Login failed.",401);await setSession(out.session);return NextResponse.json({role:out.session.role},{headers});
     }
     const a=await actor();
+    if(method==="GET"){
+      const value=await readSnapshot(s=>{const now=Date.now();projectReadState(s,now);return routeCommand(s,a,path,method,data,req,now);});
+      return NextResponse.json(value,{headers});
+    }
+    if(path==="quiz/heartbeat"){
+      const out=await recordHeartbeat(a,data);if(out.error)throw out.error;
+      return NextResponse.json(out.value,{headers});
+    }
+    const studentWrite=path.startsWith("quiz/")||path==="team/register";
     const out=await transaction(s=>{
-      const now=Date.now();sweep(s,now);
-      try{authenticate(s,a);if(method==="POST")throttle(s,`actions:${a.id}`,180,60000,now);
+      const now=Date.now();
+      try{const u=authenticate(s,a);if(studentWrite)assert(u.role==="LEADER","Student access required.",403);
+        sweep(s,now,u.role==="LEADER"?s.teams.find(t=>t.leaderId===u.id&&t.registrationClearedAt===undefined)?.id||"no-team":undefined);
+        if(method==="POST")throttle(s,`actions:${a.id}`,180,60000,now);
         const draft=structuredClone(s);const value=routeCommand(draft,a,path,method,data,req,now);Object.assign(s,draft);return {value};
       }catch(error){return {error};}
-    });
+    },studentWrite?{leaderId:a.id}:undefined);
     if(out.error)throw out.error;if(path==="auth/logout")await clearSession();
     return NextResponse.json(out.value,{headers});
   }catch(e){return errorResponse(e);}

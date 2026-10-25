@@ -1,4 +1,4 @@
-import { beforeEach,describe,expect,it } from "vitest";
+import { afterEach,beforeEach,describe,expect,it,vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { adminCommand,adminView,authenticate,canonicalKey,current,getQuestion,login,newAttempt,paperSchema,quizCommand,registerTeam,result,signup,studentView,sweep } from "../src/server/engine";
 import { emptyState,type Actor,type State,type User } from "../src/server/model";
@@ -6,6 +6,7 @@ import { hashPassword } from "../src/server/security";
 import { parseRosterCsv } from "../src/server/roster";
 import { practicePapers } from "../scripts/practice-papers";
 import { QUIZ_DURATION_MS } from "../src/contracts/timing";
+afterEach(()=>vi.unstubAllEnvs());
 let s:State,u:User,admin:User,actor:Actor;const now=1800000000000;
 function addRoster(number:number,count=2){const team={number,members:Array.from({length:count},(_,i)=>({registration_number:`R${number}M${i+1}`,name:`Roster Person ${i+1}`}))};s.roster!.push(team);return team;}
 function user(id="R1M1",name="Chosen Signup Name"){const a=signup(s,{registration_id:id,name},now);return s.users.find(u=>u.id===a.id)!;}
@@ -54,9 +55,16 @@ describe("optional tiered hints and private results",()=>{
 describe("forty-minute expiry and admin restoration",()=>{
  it("expires at exactly forty minutes and preserves partial marks",()=>{start();const q=select(1),p=s.papers.find(p=>p.id===q.question_id)!;cmd("submit-key",{question_id:q.question_id,submitted_key:p.key},now+QUIZ_DURATION_MS-1);const next=getQuestion(s,u,a().activeModule,now+QUIZ_DURATION_MS-1);expect(()=>cmd("submit-key",{question_id:next.question_id,submitted_key:"1"},now+QUIZ_DURATION_MS)).toThrow("40-minute");expect(a().completionReason).toBe("time_limit");expect(a().total).toBe(2);expect(a().completedAt).toBe(now+QUIZ_DURATION_MS);});
  it("expires even during lockout and paper callback with monitoring off",()=>{start();select(1);adminCommand(s,admin,"toggle-paper-release",{release_status:false},now+1000);a().locked=true;sweep(s,now+QUIZ_DURATION_MS);expect(a().state).toBe("completed");expect(a().locked).toBe(false);});
- it("restores the exact selected question and clock",()=>{start();select(3);s.control.monitoring=true;sweep(s,now+11000);expect(a().locked).toBe(true);adminCommand(s,admin,"lockout-team",{team_id:s.teams[0].id,lock_status:false,reason:"Verified network"},now+12000);expect(a().activeModule).toBe(3);expect(a().startedAt).toBe(now);expect(a().sequence?.[0]).toBe(3);});
+ it("restores the exact selected question and clock",()=>{start();select(3);s.control.monitoring=true;sweep(s,now+61000);expect(a().locked).toBe(true);adminCommand(s,admin,"lockout-team",{team_id:s.teams[0].id,lock_status:false,reason:"Verified network"},now+62000);expect(a().activeModule).toBe(3);expect(a().startedAt).toBe(now);expect(a().sequence?.[0]).toBe(3);});
  it("archives an attempt on confirmed replacement and waits for explicit restart",()=>{start();select(1);const old=a().id;adminCommand(s,admin,"override-set",{team_id:s.teams[0].id,set_id:2,reason:"Paper replacement",confirm_reset:true},now+1000);expect(a().id).not.toBe(old);expect(a().state).toBe("waiting");expect(a().startedAt).toBeNull();expect(a().set).toBe(2);});
  it("records reported focus violations",()=>{start();select(1);s.control.monitoring=true;cmd("proctor-event",{event_type:"FOCUS_LOST",details:"Test"});expect(a().locked).toBe(true);});
+});
+
+describe("sixty-second connection grace and separate tab violations",()=>{
+ it("waits a full sixty seconds and records a missing heartbeat separately",()=>{vi.stubEnv("HEARTBEAT_TIMEOUT_MS","");start();select(1);s.control.monitoring=true;sweep(s,now+60000);expect(a().locked).toBe(false);expect(studentView(s,u,now).heartbeatTimeout).toBe(60000);sweep(s,now+60001);expect(a().locked).toBe(true);expect(s.audit.at(-1)?.type).toBe("HEARTBEAT_MISSED");});
+ it("accepts a heartbeat returning within the grace window",()=>{start();select(1);s.control.monitoring=true;sweep(s,now+59000);cmd("heartbeat",{focused:true,hidden:false,width:1280,height:720},now+59000);sweep(s,now+61000);expect(a().locked).toBe(false);});
+ it("locks a reported tab switch immediately rather than waiting for a heartbeat timeout",()=>{start();select(1);s.control.monitoring=true;cmd("proctor-event",{event_type:"TAB_HIDDEN"},now+1000);expect(a().locked).toBe(true);expect(a().lockReason).toContain("TAB_HIDDEN");expect(s.audit.at(-1)?.type).toBe("TAB_HIDDEN");});
+ it.each([[false,false,"FOCUS_LOST"],[true,true,"TAB_HIDDEN"]] as const)("classifies heartbeat visibility hidden=%s focused=%s as %s",(hidden,focused,event)=>{start();select(1);s.control.monitoring=true;cmd("heartbeat",{focused,hidden,width:1280,height:720},now+1000);expect(a().locked).toBe(true);expect(s.audit.at(-1)?.type).toBe(event);});
 });
 describe("timer starts at the first module",()=>{
  it("allows unlimited untimed selection-page time without heartbeat locks or expiry",()=>{start();s.control.monitoring=true;sweep(s,now+QUIZ_DURATION_MS*2);expect(a().startedAt).toBeNull();expect(a().locked).toBe(false);expect(a().state).toBe("active");cmd("proctor-event",{event_type:"FOCUS_LOST"},now+QUIZ_DURATION_MS*2);expect(a().locked).toBe(false);});

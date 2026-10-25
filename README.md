@@ -14,6 +14,7 @@ A team mathematics assessment portal built with Next.js, React, TypeScript and S
 - Hints unlock after five minutes. Their penalties are cumulative tiers, not additions: using a one-mark tier means a total one-mark deduction. Each disclosure requires a confirmation showing its total cost; Cancel makes no request and applies no deduction.
 - Student screens and API responses contain no scores or performance breakdowns. Completed submissions return home within 60 seconds. Only the administrator sees results and exports.
 - A top-of-page theme toggle switches light/dark mode and remembers the preference.
+- Heartbeats are sent every three seconds with 60 seconds allowed for a connection gap. Tab switching and focus violations are recorded separately and lock immediately when monitoring is enabled.
 
 The supplied papers and answer keys are transcribed as written, including the source formula/hint inconsistencies the user chose to preserve.
 
@@ -32,7 +33,7 @@ Use separate browser profiles/private windows to use student and administrator s
 
 ## New installation and deployment
 
-Follow [the deployment runbook](docs/deployment.md) for release checks, production settings, all five migrations, private data import and the per-second watchdog. Node 24 and Vercel build settings are declared in this directory. Run `npm run verify`, then `npm run deploy:check -- --env-file .env.production.local` against the target database. Live Supabase/Vercel deployment has not been provisioned.
+Follow [the deployment runbook](docs/deployment.md) for release checks, production settings, all seven migrations, private data import and the per-second watchdog. Node 24 and Vercel build settings are declared in this directory. Run `npm run verify`, then `npm run deploy:check -- --env-file .env.production.local` against the target database. The live portal uses Supabase PostgreSQL and Vercel.
 
 For a fresh local rehearsal only, `npm run demo` creates a synthetic roster and practice papers. For the actual class, use:
 
@@ -42,7 +43,11 @@ npm run class:import -- <absolute-team-csv> <absolute-private-paper-json>
 
 The importer checks the CSV and all 15 questions. It will archive an earlier local practice session before replacing it, and refuses to overwrite an active class exam. The current source material is prepared privately under `.data/import/`.
 
+For an existing class, use `npm run roster:update -- "<team.csv>"` to preview and append `--apply` to save. See [roster update instructions](docs/roster-updates.md) for Supabase/Vercel steps and registration safeguards. The updated roster has 11 teams and 54 members; it preserves existing attempts and paper allocations.
+
 ## Checks
+
+Status/SSE reads now avoid the shared writer lock, and heartbeats update only their own attempt's metadata. See [request performance and concurrency checks](docs/performance.md). Existing databases need migration 007 before deploying these paths.
 
 ```text
 npm run verify

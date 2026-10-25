@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { newAttempt } from "../src/server/engine";
 import { QUIZ_DURATION_MS } from "../src/contracts/timing";
 let db:PGlite;const leader=randomUUID(),team=randomUUID();
-beforeAll(async()=>{db=new PGlite();await db.exec("create role anon; create role authenticated;");await db.exec(await readFile("supabase/migrations/001_portal.sql","utf8"));await db.exec(await readFile("supabase/migrations/002_watchdog.sql","utf8"));await db.exec(await readFile("supabase/migrations/003_forty_minute_limit.sql","utf8"));await db.exec(await readFile("supabase/migrations/004_roster_and_unlimited_members.sql","utf8"));await db.exec(await readFile("supabase/migrations/005_module_start_and_portal_registration.sql","utf8"));},30000);
+beforeAll(async()=>{db=new PGlite();await db.exec("create role anon; create role authenticated;");await db.exec(await readFile("supabase/migrations/001_portal.sql","utf8"));await db.exec(await readFile("supabase/migrations/002_watchdog.sql","utf8"));await db.exec(await readFile("supabase/migrations/003_forty_minute_limit.sql","utf8"));await db.exec(await readFile("supabase/migrations/004_roster_and_unlimited_members.sql","utf8"));await db.exec(await readFile("supabase/migrations/005_module_start_and_portal_registration.sql","utf8"));await db.exec(await readFile("supabase/migrations/006_sixty_second_heartbeat.sql","utf8"));await db.exec(await readFile("supabase/migrations/007_concurrent_heartbeats.sql","utf8"));},30000);
 afterAll(async()=>{await db?.close();});
 describe("PostgreSQL migration and access boundaries",()=>{
   it("refuses anonymous and authenticated access to the private schema",async()=>{
@@ -25,11 +25,15 @@ describe("PostgreSQL migration and access boundaries",()=>{
     await db.query("insert into quiz_private.members values($1,'MA006',false,'Sixth Member')",[team]);
     await expect(db.query("insert into quiz_private.members values($1,'MA001',false,'Duplicate Member')",[team])).rejects.toThrow(/duplicate/);
   });
-  it("locks stale active attempts even when no browser sends a request",async()=>{
+  it("allows short connection gaps and locks only after sixty seconds without a browser request",async()=>{
     const a=newAttempt(team);a.state="active";a.activeModule=1;a.sequence=[1,2,3,4,5];a.startedAt=Date.now()-20000;a.lastHeartbeat=Date.now()-20000;
     await db.query("update quiz_private.control set body=body || '{\"released\":true}'::jsonb where id=1");
     await db.query("update quiz_private.teams set body=$1 where id=$2",[JSON.stringify({attemptId:a.id}),team]);
     await db.query("insert into quiz_private.attempts values($1,$2,$3)",[a.id,team,JSON.stringify(a)]);
+    await db.exec("select quiz_private.watchdog()");
+    expect((await db.query<{body:{locked:boolean}}>("select body from quiz_private.attempts where id=$1",[a.id])).rows[0].body.locked).toBe(false);
+    a.lastHeartbeat=Date.now()-61000;
+    await db.query("update quiz_private.attempts set body=$1 where id=$2",[JSON.stringify(a),a.id]);
     await db.exec("select quiz_private.watchdog()");
     const r=await db.query<{body:{locked:boolean}}>("select body from quiz_private.attempts where id=$1",[a.id]);expect(r.rows[0].body.locked).toBe(true);
     const log=await db.query("select * from quiz_private.audit");expect(log.rows).toHaveLength(1);

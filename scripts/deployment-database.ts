@@ -9,7 +9,7 @@ export async function checkDeploymentDatabase(query: DeploymentQuery) {
     select tablename, rowsecurity from pg_tables where schemaname='quiz_private'`);
   const required = ["control", "profiles", "teams", "members", "attempts", "papers", "audit", "roster_teams", "roster_students"];
   if (required.some(name => !tables.some(t => t.tablename === name && t.rowsecurity)))
-    throw new Error("Apply all five database migrations; every private table must have RLS enabled.");
+    throw new Error("Apply all seven database migrations; every private table must have RLS enabled.");
   const permissions = await query<{ exposed: boolean }>(`
     select exists (
       select 1 from pg_tables t cross join (values ('anon'), ('authenticated')) r(role)
@@ -38,8 +38,8 @@ export async function checkDeploymentDatabase(query: DeploymentQuery) {
   }
   const watchdog = await query<{ definition: string }>(`
     select pg_get_functiondef(to_regprocedure('quiz_private.watchdog()')) as definition`);
-  if (!["registrationClearedAt", "activeModule", "2400000"].every(token => watchdog[0]?.definition?.includes(token)))
-    throw new Error("Apply migration 005 to install the current exam watchdog.");
+  if (!["registrationClearedAt", "activeModule", "2400000", "60000", "if not found then continue"].every(token => watchdog[0]?.definition?.includes(token)))
+    throw new Error("Apply migration 007 to install the watchdog compatible with concurrent heartbeats.");
   const cron = await query<{ installed: boolean }>(`select to_regclass('cron.job') is not null as installed`);
   if (!cron[0].installed) throw new Error("Enable pg_cron and schedule the watchdog every second (see docs/deployment.md).");
   const jobs = await query<{ schedule: string }>(`

@@ -12,6 +12,7 @@ export interface Attempt {
   sequence?: number[];
   startedAt: number | null; completedAt: number | null; completionReason?: "solved" | "time_limit"; revision: number;
   progress: Progress[]; total: number; lastHeartbeat: number | null; heartbeatSession: string | null;
+  heartbeatRate?: { count: number; until: number };
 }
 export interface Paper { id: string; set: number; module: number; text: string; key: string; hints: { text: string; deduction: number }[]; version: string }
 export interface Audit { id: string; actor: string; teamId?: string; type: string; details: string; at: number }

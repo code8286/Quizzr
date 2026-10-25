@@ -1,10 +1,13 @@
 import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import postgres from "postgres";
-import { emptyState, type State } from "./model";
+import { emptyState, type Actor, type State } from "./model";
 import { assertProductionConfig } from "./production";
+import { rosterStatements } from "./roster-update";
+import { HEARTBEAT_CONTEXT_SQL, HEARTBEAT_SAVE_SQL, READ_STATE_SQL, heartbeatState, heartbeatPatch, type HeartbeatContext } from "./read-queries";
+import { heartbeatReply } from "./heartbeat";
 
-export type Transaction = <T>(fn: (state: State) => T | Promise<T>) => Promise<T>;
+export type Transaction = <T>(fn: (state: State) => T | Promise<T>,scope?:{leaderId:string}) => Promise<T>;
 const dataDir = () => path.resolve(/* turbopackIgnore: true */ process.env.QUIZ_DATA_DIR || ".data");
 let pool: ReturnType<typeof postgres> | undefined;
 function database() {
@@ -33,26 +36,34 @@ async function localTransaction<T>(fn: (state: State) => T | Promise<T>): Promis
     return result;
   } finally {await rm(lock,{recursive:true,force:true});}
 }
-async function postgresTransaction<T>(fn:(state:State)=>T|Promise<T>):Promise<T> {
+async function postgresTransaction<T>(fn:(state:State)=>T|Promise<T>,scope?:{leaderId:string}):Promise<T> {
   const result=await database().begin(async sql=>{
     // One serialized classroom exam aggregate. All instances share this lock.
     const rows=await sql`select body, limits from quiz_private.control where id=1 for update`;
     if(!rows.length)throw new Error("Apply the database migration before starting the portal.");
     const users=await sql`select body from quiz_private.profiles`;
     const teams=await sql`select body from quiz_private.teams order by team_number`;
-    const attempts=await sql`select body from quiz_private.attempts`;
+    // Writers take the same attempt-row locks as the lightweight heartbeat path.
+    // Otherwise a full-state answer/admin write could overwrite a newer heartbeat
+    // or focus lock. Read-only requests never enter this transaction.
+    if(scope)await sql`select a.id from quiz_private.attempts a join quiz_private.teams t on t.body->>'attemptId'=a.id::text where t.leader_id=${scope.leaderId} order by a.id for update of a`;
+    const attempts=scope?await sql`select body from quiz_private.attempts`:await sql`select body from quiz_private.attempts order by id for update`;
     const papers=await sql`select body from quiz_private.papers`;
     const roster=await sql`select body from quiz_private.roster_teams order by team_number`;
     const events=await sql`select body from (select body, created_at from quiz_private.audit order by created_at desc limit 200) e order by created_at`;
     const state:State={control:rows[0].body,limits:rows[0].limits,users:users.map(x=>x.body),teams:teams.map(x=>x.body),attempts:attempts.map(x=>x.body),papers:papers.map(x=>x.body),audit:events.map(x=>x.body),roster:roster.map(x=>x.body)};
     const previous=structuredClone(state);const output=await fn(state);
+    if(scope){
+      const ownTeams=new Set(state.teams.filter(t=>t.leaderId===scope.leaderId).map(t=>t.id));
+      for(const attempt of state.attempts)
+        if(JSON.stringify(previous.attempts.find(a=>a.id===attempt.id))!==JSON.stringify(attempt)&&!ownTeams.has(attempt.teamId))
+          throw new Error("A scoped student transaction cannot change another team's attempt.");
+    }
     const json=(v:unknown)=>sql.json(v as Parameters<typeof sql.json>[0]);
     if(JSON.stringify(previous.control)!==JSON.stringify(state.control)||JSON.stringify(previous.limits)!==JSON.stringify(state.limits))
       await sql`update quiz_private.control set body=${json(state.control)}, limits=${json(state.limits)} where id=1`;
-    for(const r of state.roster||[])if(JSON.stringify(previous.roster?.find(x=>x.number===r.number))!==JSON.stringify(r)){
-      await sql`insert into quiz_private.roster_teams(team_number,body) values(${r.number},${json(r)}) on conflict(team_number) do update set body=excluded.body`;
-      for(const m of r.members)await sql`insert into quiz_private.roster_students(registration,team_number) values(${m.registration_number},${r.number}) on conflict(registration) do update set team_number=excluded.team_number`;
-    }
+    for(const statement of rosterStatements(previous.roster||[],state.roster||[]))
+      await sql.unsafe(statement.text,[json(statement.roster)]);
     for(const u of state.users)if(JSON.stringify(previous.users.find(x=>x.id===u.id))!==JSON.stringify(u))
       await sql`insert into quiz_private.profiles (id,registration,role,body) values (${u.id},${u.registration},${u.role},${json(u)}) on conflict(id) do update set body=excluded.body,registration=excluded.registration,role=excluded.role`;
     for(const t of state.teams)if(JSON.stringify(previous.teams.find(x=>x.id===t.id))!==JSON.stringify(t)){
@@ -79,10 +90,47 @@ async function postgresTransaction<T>(fn:(state:State)=>T|Promise<T>):Promise<T>
   });
   return result as T;
 }
-export const transaction:Transaction=async fn=>{
+export const transaction:Transaction=async (fn,scope)=>{
   assertProductionConfig();
-  if(process.env.QUIZ_STORAGE==="postgres")return postgresTransaction(fn);
+  if(process.env.QUIZ_STORAGE==="postgres")return postgresTransaction(fn,scope);
   if(process.env.QUIZ_STORAGE==="local")return localTransaction(fn);
   throw new Error("Portal is not configured. Run npm run demo locally, or configure PostgreSQL.");
 };
+
+export const readSnapshot:Transaction=async fn=>{
+  assertProductionConfig();
+  if(process.env.QUIZ_STORAGE==="postgres"){
+    const rows=await database().unsafe<{state:State}[]>(READ_STATE_SQL);
+    if(!rows.length)throw new Error("Apply the database migration before starting the portal.");
+    return fn(rows[0].state);
+  }
+  if(process.env.QUIZ_STORAGE==="local"){
+    if(process.env.NODE_ENV==="production"&&process.env.ALLOW_LOCAL_PRODUCTION!=="true")throw new Error("Local storage is disabled in production. Configure PostgreSQL.");
+    // The writer uses atomic rename, so readers see either complete version and
+    // can safely avoid the local write lock too.
+    let state:State;
+    try{state=JSON.parse(await readFile(path.join(dataDir(),"quiz.json"),"utf8"));}
+    catch(e){if((e as NodeJS.ErrnoException).code!=="ENOENT")throw e;state=emptyState();}
+    return fn(state);
+  }
+  throw new Error("Portal is not configured. Run npm run demo locally, or configure PostgreSQL.");
+};
+
+export async function recordHeartbeat(actor:Actor,data:unknown){
+  assertProductionConfig();
+  if(process.env.QUIZ_STORAGE!=="postgres")return transaction(state=>heartbeatReply(state,actor,data,Date.now()));
+  return database().begin(async sql=>{
+    const rows=await sql.unsafe<HeartbeatContext[]>(HEARTBEAT_CONTEXT_SQL,[actor.id]);
+    const state=heartbeatState(rows[0]),before=structuredClone(state.attempts[0]);
+    const reply=heartbeatReply(state,actor,data,Date.now());
+    const attempt=state.attempts[0],json=(v:unknown)=>sql.json(v as Parameters<typeof sql.json>[0]);
+    if(attempt&&before&&JSON.stringify(attempt)!==JSON.stringify(before)){
+      const patch=heartbeatPatch(before,attempt);
+      await sql.unsafe(HEARTBEAT_SAVE_SQL,[attempt.id,json(patch.changes),json(patch.removed)]);
+    }
+    for(const event of state.audit)
+      await sql`insert into quiz_private.audit(id,created_at,body) values(${event.id},${new Date(event.at)},${json(event)})`;
+    return reply;
+  });
+}
 export async function closeStore(){if(pool){await pool.end();pool=undefined;}}

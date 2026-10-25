@@ -15,16 +15,16 @@ npm audit --audit-level=low
 ## Prepare production
 
 1. Create a dedicated Supabase database. Use a different database and secrets for previews.
-2. Apply all five files in `supabase/migrations/` in numeric order in the trusted SQL editor, ending with `005_module_start_and_portal_registration.sql`. Apply only missing migrations to existing databases; the migrations cannot be replayed.
+2. Apply all seven files in `supabase/migrations/` in numeric order in the trusted SQL editor, ending with `007_concurrent_heartbeats.sql`. Apply only missing migrations to existing databases; the migrations cannot be replayed.
 3. Enable pg_cron. Inspect `cron.job` for an existing watchdog first, then schedule it once using the application's database role:
 
    ```sql
    select cron.schedule('quiz-heartbeat-watchdog', '1 second', 'select quiz_private.watchdog()');
    ```
 
-   Check `cron.job_run_details` for successful execution. A minute-level HTTP cron cannot meet the ten-second heartbeat rule.
+   Check `cron.job_run_details` for successful execution. The per-second scheduler checks for missing heartbeats after 60 seconds; tab/focus violations are enforced separately and immediately.
 
-4. Create an ignored `.env.production.local` on the trusted import machine. All `.env*` files, including templates, are excluded from Git and deployment uploads. Set `QUIZ_STORAGE=postgres`, the transaction-pooler `DATABASE_URL`, a unique random `SESSION_SECRET` of at least 32 characters, the exact public HTTPS `APP_ORIGIN` without a trailing slash, and `HEARTBEAT_TIMEOUT_MS=10000`. The local `.env.production.example` can be used as a starting point if available. Generate the session secret with:
+4. Create an ignored `.env.production.local` on the trusted import machine. All `.env*` files, including templates, are excluded from Git and deployment uploads. Set `QUIZ_STORAGE=postgres`, the transaction-pooler `DATABASE_URL`, a unique random `SESSION_SECRET` of at least 32 characters, the exact public HTTPS `APP_ORIGIN` without a trailing slash, and `HEARTBEAT_TIMEOUT_MS=60000`. The local `.env.production.example` can be used as a starting point if available. Generate the session secret with:
 
    ```text
    node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
@@ -59,9 +59,15 @@ For another Node host, run `npm ci`, `npm run build`, then `npm start` with the 
 
 ## Before admitting students
 
+The heartbeat policy is 60 seconds (`HEARTBEAT_TIMEOUT_MS=60000` in Vercel Production). Existing databases need migration `006_sixty_second_heartbeat.sql`; it preserves attempts and existing locks. Tab-switch/focus events remain immediate and are logged independently of missed heartbeats. After changing an environment variable, deploy the updated source so the production functions use it. Restore already-locked teams separately in Admin when appropriate.
+
+Apply `007_concurrent_heartbeats.sql` before deploying the lightweight heartbeat and lock-free read paths. It prevents an obsolete watchdog lock when a heartbeat completes while the watchdog waits. See [the request-path guide](performance.md) for the isolated PostgreSQL concurrency check.
+
 - Open the final HTTPS domain and sign in as administrator. Rehearse the full student flow on the separate staging database. Leave production papers unreleased until the exam starts.
 - Confirm successful watchdog execution logs. Unauthenticated `/api/admin/export` and `/api/cron/watchdog` must return 401.
 - `/api/health` checks process liveness only. Its 200 response does not verify the database; require the launch check to pass against the deployed environment.
 - Retain a private database backup and record the deployed revision. Roll back application code by redeploying a compatible earlier version; do not reset the database or rerun imports during an exam.
 
 The code can be verified without production credentials. A hosted release still requires the database, scheduler, secrets and domain to be provisioned and checked.
+
+For subsequent roster changes, follow [the roster update guide](roster-updates.md). Use `roster:update` rather than the initial class importer. The live site reads roster updates from Supabase without a rebuild.

@@ -12,3 +12,5 @@ private-papers*.json
 .next-verify/
 .vercel/
 .devdata.txt
+.vercel
+.env*

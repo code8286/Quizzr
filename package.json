@@ -14,12 +14,14 @@
     "test:e2e": "playwright test",
     "test:ui": "playwright test --config=playwright.ui.config.ts",
     "test:production": "playwright test --config=playwright.production.config.ts",
+    "test:concurrency": "tsx scripts/check-concurrency.ts",
     "verify": "npm test && npm run test:e2e && npm run test:production && npm run build && npm run typecheck",
     "deploy:check": "tsx scripts/check-deployment.ts",
     "demo": "tsx scripts/setup.ts demo",
     "setup:admin": "tsx scripts/setup.ts admin",
     "papers:import": "tsx scripts/setup.ts papers",
-    "class:import": "tsx scripts/import-class.ts"
+    "class:import": "tsx scripts/import-class.ts",
+    "roster:update": "tsx scripts/update-roster.ts"
   },
   "dependencies": {
     "jose": "^6.1.0",

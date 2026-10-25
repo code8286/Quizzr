@@ -57,7 +57,7 @@ On first release, all roster teams receive balanced randomized assignments, incl
 ## Production Supabase setup
 
 1. Create a dedicated Supabase PostgreSQL project for the exam; use separate projects for previews and production.
-2. Apply migrations 001 through 005 in order. Existing databases already on 004 need `005_module_start_and_portal_registration.sql` for the selection-time start rule and watchdog exclusion of cleared registrations. The existing cron schedule stays unchanged.
+2. Apply migrations 001 through 007 in order. Existing databases already on 004 need `005_module_start_and_portal_registration.sql` for the selection-time start rule and watchdog exclusion of cleared registrations. The existing cron schedule stays unchanged.
 3. Enable pg_cron and schedule `quiz_private.watchdog()` once using the command documented in migration 002. Migration 003 replaces that function with deadline finalization; it also preserves missed-heartbeat enforcement. The existing schedule remains valid.
 4. Use the transaction-pooler URL as server-only DATABASE_URL. Set QUIZ_STORAGE=postgres, a random SESSION_SECRET of at least 32 characters, and the exact APP_ORIGIN. The Postgres driver disables prepared statements and requires TLS by default.
 5. Run `npm run setup:admin` in a trusted environment pointing to that database. Administrator passwords are salted and hashed. Student login uses ID/name as requested, while cookies remain signed, HTTP-only and session-bound.
@@ -71,9 +71,11 @@ The production PostgreSQL adapter serializes the small classroom exam aggregate 
 
 Live updates use authenticated SSE with reconnect and polling fallback. The scheduled watchdog handles absent browsers. Focus/visibility/cursor/keyboard/window signals remain imperfect browser telemetry; the administrator can review and restore a lock. Normal browser restrictions on OS shortcuts still apply. The completed student page navigates home instead of trying to close the tab.
 
+Migration 006 sets the heartbeat grace to 60 seconds. The application uses `HEARTBEAT_TIMEOUT_MS=60000` and sends check-ins every three seconds. A missing connection is audited as `HEARTBEAT_MISSED`; a reported tab switch is `TAB_HIDDEN` and a focus loss is `FOCUS_LOST`. Tab/focus violations remain immediate and do not receive the connection grace. The migration preserves existing locks, attempts and timer start times.
+
 ## Verification
 
-The updated tests cover signup-name login, roster-only IDs, arbitrary member/team counts, full-team matching independent of names, concurrent leader claims, balanced allocations including absent teams, timer start on initial module selection, one first-module choice, random unique sequence, future-question blocking, tiered deductions, hint confirmation, no-hint questions, private student APIs, lock restoration and forty-minute expiry. PostgreSQL-compatible schema tests apply all five migrations. The HTTP suite exercises actual handlers with synthetic data in a separate store. Browser checks use a synthetic preview so real student accounts are not claimed during testing.
+The updated tests cover signup-name login, roster-only IDs, arbitrary member/team counts, full-team matching independent of names, concurrent leader claims, balanced allocations including absent teams, timer start on initial module selection, one first-module choice, random unique sequence, future-question blocking, tiered deductions, hint confirmation, no-hint questions, private student APIs, lock restoration and forty-minute expiry. PostgreSQL-compatible schema tests apply all seven migrations. The HTTP suite exercises actual handlers with synthetic data in a separate store. Browser checks use a synthetic preview so real student accounts are not claimed during testing.
 
 The live Supabase project and Vercel deployment are still unconfigured because no hosting credentials have been supplied. These local checks do not claim a deployed database or hosted scheduler has been exercised.
 

@@ -12,7 +12,7 @@ const query: DeploymentQuery = async <Row extends Record<string, unknown>>(sql: 
 beforeAll(async () => {
   db = new PGlite();
   await db.exec("create role anon; create role authenticated;");
-  for (const file of ["001_portal.sql", "002_watchdog.sql", "003_forty_minute_limit.sql", "004_roster_and_unlimited_members.sql", "005_module_start_and_portal_registration.sql"])
+  for (const file of ["001_portal.sql", "002_watchdog.sql", "003_forty_minute_limit.sql", "004_roster_and_unlimited_members.sql", "005_module_start_and_portal_registration.sql", "006_sixty_second_heartbeat.sql", "007_concurrent_heartbeats.sql"])
     await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
   for (const paper of practicePapers)
     await db.query("insert into quiz_private.papers values($1,$2,$3,$4,$5)", [paper.id, paper.set, paper.module, paper.version, JSON.stringify(paper)]);

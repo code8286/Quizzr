@@ -13,7 +13,7 @@ const mode=process.argv[2];
 async function main(){
   if(mode==="demo") {
     if(process.env.QUIZ_STORAGE==="postgres" || process.env.DATABASE_URL)throw new Error("Demo setup refuses to modify a configured database.");
-    if(!existsSync(".env.local"))await writeFile(".env.local",`QUIZ_STORAGE=local\nSESSION_SECRET=${randomBytes(48).toString("base64url")}\nAPP_ORIGIN=http://127.0.0.1:3000\nHEARTBEAT_TIMEOUT_MS=10000\n`);
+    if(!existsSync(".env.local"))await writeFile(".env.local",`QUIZ_STORAGE=local\nSESSION_SECRET=${randomBytes(48).toString("base64url")}\nAPP_ORIGIN=http://127.0.0.1:3000\nHEARTBEAT_TIMEOUT_MS=60000\n`);
     process.loadEnvFile(".env.local");
     await transaction(s=>{
       if(s.users.length || s.teams.length)throw new Error("A portal already exists. Demo setup never overwrites data.");
