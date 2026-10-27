@@ -5,6 +5,8 @@ node_modules/
 .next*/
 .env*
 **/.env*
+.devdata.txt
+devdata.txt
 .data/
 Prompts/
 docs/

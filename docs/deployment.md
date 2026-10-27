@@ -15,7 +15,7 @@ npm audit --audit-level=low
 ## Prepare production
 
 1. Create a dedicated Supabase database. Use a different database and secrets for previews.
-2. Apply all seven files in `supabase/migrations/` in numeric order in the trusted SQL editor, ending with `007_concurrent_heartbeats.sql`. Apply only missing migrations to existing databases; the migrations cannot be replayed.
+2. Apply all eight files in `supabase/migrations/` in numeric order in the trusted SQL editor, ending with `008_class_archives.sql`. Apply only missing migrations to existing databases. Migration 008 creates private archive storage without replacing the active class; class replacement is a separate explicit operation.
 3. Enable pg_cron. Inspect `cron.job` for an existing watchdog first, then schedule it once using the application's database role:
 
    ```sql
@@ -45,7 +45,7 @@ npm audit --audit-level=low
    npm run deploy:check -- --env-file .env.production.local
    ```
 
-   It checks settings, connectivity, private table access/RLS, all 15 questions, the roster, administrator passwords, the latest watchdog and exactly one active per-second schedule. It exits unsuccessfully on a blocker and changes no records. It never implicitly reads `.env.local`. Existing shell variables take precedence over the explicit file. Connection secrets and paper content are not printed.
+   It checks settings, connectivity, private table access/RLS (including class archives), all 15 questions, the roster, administrator passwords, the latest watchdog and exactly one active per-second schedule. It exits unsuccessfully on a blocker and changes no records. It never implicitly reads `.env.local`. Existing shell variables take precedence over the explicit file. Connection secrets and paper content are not printed.
 
 ## Deploy
 
@@ -53,7 +53,7 @@ Set the same variables in the host's server-side Production environment. Never p
 
 On Vercel, import this directory, choose the production domain, configure the variables, and deploy. Configure a preview-specific `APP_ORIGIN` and database before testing Preview deployments. `.vercelignore` excludes local state, secrets, private papers, planning files, tests and generated artifacts from CLI uploads. Next's tracing exclusions also keep private source data out of server functions. Never publish the entire workspace as a static folder or public archive.
 
-This workspace is currently inside a parent Git repository that ignores this folder. For Git-based hosting, publish this directory as its own repository first. A Vercel CLI deployment can use the directory directly with the supplied upload exclusions.
+This directory is the standalone repository at `https://github.com/code8286/Quizzr`, on branch `main`. Push reviewed source and documentation to the connected branch for Git-based hosting. A Vercel CLI deployment can also use the directory directly with the supplied upload exclusions. Environment files, `devdata.txt` notes and `.data/` results/backups must remain local.
 
 For another Node host, run `npm ci`, `npm run build`, then `npm start` with the production environment. The server binds to `0.0.0.0` and uses the host's `PORT` (default 3000). Terminate HTTPS at the hosting proxy and disable proxy buffering for `/api/events`.
 
@@ -71,3 +71,9 @@ Apply `007_concurrent_heartbeats.sql` before deploying the lightweight heartbeat
 The code can be verified without production credentials. A hosted release still requires the database, scheduler, secrets and domain to be provisioned and checked.
 
 For subsequent roster changes, follow [the roster update guide](roster-updates.md). Use `roster:update` rather than the initial class importer. The live site reads roster updates from Supabase without a rebuild.
+
+For an entirely new cohort, follow [class replacement and recovery](class-replacement.md). Do not run replacement or progress-reset scripts during deployment verification; both change the selected assessment database and require their explicit `--apply` flag.
+
+## Credential history
+
+The formerly tracked `devdata.txt` included a database credential. It is now excluded from Git, deployment uploads and production traces, while the local file remains available. Earlier commits still contain it. Rotate the affected database password through the database provider, then update the ignored environment files and hosting settings that use it. Redeploy after changing hosted settings and re-run the read-only preflight. Removing the current file alone does not invalidate the password. This release does not rewrite published Git history.

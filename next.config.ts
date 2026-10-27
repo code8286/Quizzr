@@ -3,7 +3,7 @@ const config: NextConfig = {
   poweredByHeader: false,
   distDir: process.env.QUIZ_BUILD_DIR || ".next",
   devIndicators: false,
-  outputFileTracingExcludes: {"/*":["./.data/**/*","./.env*","./**/.env*","./Prompts/**/*","./tests/**/*","./private-papers*.json"]},
+  outputFileTracingExcludes: {"/*":["./.data/**/*","./.env*","./**/.env*","./devdata.txt","./.devdata.txt","./Prompts/**/*","./tests/**/*","./private-papers*.json"]},
   async headers() {
     return [{ source: "/:path*", headers: [
       { key: "X-Content-Type-Options", value: "nosniff" },

@@ -1,8 +1,8 @@
 # Setup, implementation and operation
 
-## Current local installation
+## Class data and local rehearsal
 
-The supplied CSV and three papers have been imported. The roster has 11 numbered teams and 52 students. Empty team-number cells are carried down from the preceding numbered row. Every registration ID is unique. Team numbers are preserved, and neither 5-member nor 12-team limits remain in application rules or the latest database migration.
+The current documented cohort has 11 numbered teams and 53 students, following the class replacement recorded in [class replacement and recovery](class-replacement.md). The earlier roster update guide describes a previous 54-student cohort. Local rehearsal data is managed separately; changing documentation or publishing source does not replace that data. Empty team-number CSV cells inherit the preceding number. Registration IDs must be unique, and no fixed member-count or team-count cap applies.
 
 The earlier synthetic practice state was backed up under `.data/archive/` before import. The current state is `.data/quiz.json`. The source CSV, PDFs, private question JSON and extracted review files have not been placed in public assets. They must not be served directly or committed as assessment secrets.
 
@@ -57,7 +57,7 @@ On first release, all roster teams receive balanced randomized assignments, incl
 ## Production Supabase setup
 
 1. Create a dedicated Supabase PostgreSQL project for the exam; use separate projects for previews and production.
-2. Apply migrations 001 through 007 in order. Existing databases already on 004 need `005_module_start_and_portal_registration.sql` for the selection-time start rule and watchdog exclusion of cleared registrations. The existing cron schedule stays unchanged.
+2. Apply migrations 001 through 008 in order, applying only missing migrations to existing databases. Migration 005 installs selection-time clock start, 006 sets sixty-second heartbeat grace, 007 handles concurrent heartbeat/watchdog updates, and 008 adds private class archives. The existing cron schedule stays unchanged. Creating archive storage does not replace the active class.
 3. Enable pg_cron and schedule `quiz_private.watchdog()` once using the command documented in migration 002. Migration 003 replaces that function with deadline finalization; it also preserves missed-heartbeat enforcement. The existing schedule remains valid.
 4. Use the transaction-pooler URL as server-only DATABASE_URL. Set QUIZ_STORAGE=postgres, a random SESSION_SECRET of at least 32 characters, and the exact APP_ORIGIN. The Postgres driver disables prepared statements and requires TLS by default.
 5. Run `npm run setup:admin` in a trusted environment pointing to that database. Administrator passwords are salted and hashed. Student login uses ID/name as requested, while cookies remain signed, HTTP-only and session-bound.
@@ -67,7 +67,7 @@ On first release, all roster teams receive balanced randomized assignments, incl
 
 All database tables remain in a private schema, with browser grants revoked and RLS enabled. Trusted server requests bind leaders to their own team and administrator permissions to the stored role. Student-safe DTOs omit marks, total scores, per-question progress records and future question order. The student result endpoint returns 403 even after completion. The admin dashboard and export retain the full results.
 
-The production PostgreSQL adapter serializes the small classroom exam aggregate using a shared transaction lock and relational uniqueness checks. The local adapter uses a cross-process file lock and atomic replacement. New roster tables persist team groups and unique student IDs; the deferred team-membership trigger verifies the entire imported set without comparing names.
+PostgreSQL status/question/SSE reads use a consistent snapshot without the shared writer lock. Heartbeats lock only their own attempt and update heartbeat metadata. Student mutations serialize through the control row and lock their team's attempt; global administrator mutations lock the affected attempt rows. See [request paths and concurrency](performance.md). The local adapter uses a cross-process file lock and atomic replacement. Roster tables persist team groups and unique student IDs; the deferred membership trigger verifies the full imported set without comparing names.
 
 Live updates use authenticated SSE with reconnect and polling fallback. The scheduled watchdog handles absent browsers. Focus/visibility/cursor/keyboard/window signals remain imperfect browser telemetry; the administrator can review and restore a lock. Normal browser restrictions on OS shortcuts still apply. The completed student page navigates home instead of trying to close the tab.
 
@@ -75,9 +75,9 @@ Migration 006 sets the heartbeat grace to 60 seconds. The application uses `HEAR
 
 ## Verification
 
-The updated tests cover signup-name login, roster-only IDs, arbitrary member/team counts, full-team matching independent of names, concurrent leader claims, balanced allocations including absent teams, timer start on initial module selection, one first-module choice, random unique sequence, future-question blocking, tiered deductions, hint confirmation, no-hint questions, private student APIs, lock restoration and forty-minute expiry. PostgreSQL-compatible schema tests apply all seven migrations. The HTTP suite exercises actual handlers with synthetic data in a separate store. Browser checks use a synthetic preview so real student accounts are not claimed during testing.
+The tests cover signup-name login, roster-only IDs, arbitrary member/team counts, full-team matching independent of names, concurrent leader claims, balanced allocations including absent teams, selection-time clock start, one first-module choice, random unique sequence, future-question blocking, tiered hints, private student APIs, lock restoration, forty-minute expiry and independent exam/release controls. Migration, deployment and archive tests cover all eight migrations, private archive access, rollback and replacement no-ops. HTTP and browser checks use synthetic data in a separate store so real student accounts are not claimed.
 
-The live Supabase project and Vercel deployment are still unconfigured because no hosting credentials have been supplied. These local checks do not claim a deployed database or hosted scheduler has been exercised.
+The live portal uses Supabase PostgreSQL and Vercel. Local release checks validate source against synthetic data; they do not establish the current hosted database, scheduler or deployment state. Run the read-only check from [deployment](deployment.md) against the selected environment before launch. Private reports and raw exports stay under ignored `.data/results/` storage.
 
 ## Delete a portal registration
 
@@ -86,3 +86,17 @@ In the admin dashboard, select the team, enter a reason, choose **Delete registr
 The action is a soft removal. It preserves the roster, assigned team number/paper allocation, account records, member rows, previous submitted answers/results and an audited registration snapshot. A fresh registration reuses the same stored team identity but creates a new empty attempt. Database rows are updated or inserted, never physically deleted by this action. A stale deletion request cannot clear a newer registration. A closed exam stays closed even if a team registers again.
 
 The forty-minute timer and the five-minute hint delay both begin at the first module selection. Monitoring and missed-heartbeat locks do not apply to the untimed selection screen. Legacy pre-choice timestamps are cleared by the application/watchdog without changing attempts that have already selected a module.
+
+## Exam closure and paper availability
+
+Closing the exam preserves the paper release setting and existing results/progress. Paper release and recall remain available after closure, but neither reopens a closed attempt. A student start request while globally closed returns `EXAM_CLOSED`. Use administrator reissue for an authorized fresh attempt; use recall only to change paper availability.
+
+## Explicit progress reset
+
+For an authorized reset within the same cohort, the operator can run:
+
+```text
+node --import=tsx scripts/reset-progress.ts --env-file .env.production.local --apply
+```
+
+This writes a private backup before changing state, creates a fresh current attempt for each active registration, retains earlier attempts and registrations, preserves paper assignments and release availability, clears global closure and records audit events. It is a database-changing operation, not a release check. New-cohort replacement uses the separate archive-backed procedure in [class replacement](class-replacement.md).

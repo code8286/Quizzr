@@ -42,5 +42,10 @@ test("passwordless roster flow, guided progression, tiered hints, private scores
  await post(replacement,"quiz/select-module",{module:2});expect((await (await replacement.get("/api/quiz/status")).json()).attempt.startedAt).toBeTruthy();
  await replacement.dispose();
  const contenders=await Promise.all([ctx(),ctx()]);for(let i=0;i<2;i++)await post(contenders[i],"auth/signup",{registration_id:`T2M${i+1}`,name:"Concurrent Leader"});const registrations=await Promise.all(contenders.map(c=>c.post("/api/team/register",{data:{members:[{name:"Member One",registration_number:"T2M1"},{name:"Member Two",registration_number:"T2M2"}]}})));expect(registrations.map(r=>r.status()).sort()).toEqual([200,409]);
+ await post(admin,"admin/close",{reason:"Verify independent controls"});
+ let closedDashboard=await (await admin.get("/api/admin/live-dashboard")).json();expect(closedDashboard.closed).toBe(true);expect(closedDashboard.released).toBe(true);
+ const closedIds=closedDashboard.teams.map((t:any)=>t.attempt.id);
+ for(const release_status of [false,true]){await post(admin,"admin/toggle-paper-release",{release_status});closedDashboard=await (await admin.get("/api/admin/live-dashboard")).json();expect(closedDashboard.closed).toBe(true);expect(closedDashboard.released).toBe(release_status);expect(closedDashboard.teams.map((t:any)=>t.attempt.id)).toEqual(closedIds);expect(closedDashboard.teams.every((t:any)=>t.attempt.state==="closed"||t.attempt.state==="completed")).toBe(true);}
+ const winner=contenders[registrations.findIndex(r=>r.status()===200)];expect((await post(winner,"quiz/start",{},409)).code).toBe("EXAM_CLOSED");
  await post(leader,"auth/logout",{});expect((await leader.get("/api/quiz/status")).status()).toBe(401);for(const c of [admin,leader,...contenders])await c.dispose();
 });

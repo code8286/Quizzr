@@ -1,5 +1,7 @@
 # Updating the class roster
 
+This page records the earlier 25 October cohort and remains the guide for edits within an existing cohort. That cohort was subsequently archived for the 53-student class described in [class replacement and recovery](class-replacement.md). Do not apply the historical counts below as a current database expectation.
+
 The 25 October roster contains **11 teams and 54 students**. Team 8 and Team 10 now have six members each; Team 11 contains the two demo accounts. Teams 1–7 and Team 9 each have five members. Two existing students moved out of Team 11; two new IDs were added. The source is `C:\Current User Data\Downloads\Team_Data.csv`.
 
 This roster was applied to both the local rehearsal and the configured live Supabase database on 25 October 2026. A read-only comparison verified the lookup index matches all 54 roster entries, and accounts, registered teams, attempts, papers and existing set assignments match the pre-update snapshot. The accompanying source changes were subsequently published to Vercel with the sixty-second heartbeat update. Refresh the live portal to use them.

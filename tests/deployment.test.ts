@@ -12,7 +12,7 @@ const query: DeploymentQuery = async <Row extends Record<string, unknown>>(sql: 
 beforeAll(async () => {
   db = new PGlite();
   await db.exec("create role anon; create role authenticated;");
-  for (const file of ["001_portal.sql", "002_watchdog.sql", "003_forty_minute_limit.sql", "004_roster_and_unlimited_members.sql", "005_module_start_and_portal_registration.sql", "006_sixty_second_heartbeat.sql", "007_concurrent_heartbeats.sql"])
+  for (const file of ["001_portal.sql", "002_watchdog.sql", "003_forty_minute_limit.sql", "004_roster_and_unlimited_members.sql", "005_module_start_and_portal_registration.sql", "006_sixty_second_heartbeat.sql", "007_concurrent_heartbeats.sql", "008_class_archives.sql"])
     await db.exec(await readFile(`supabase/migrations/${file}`, "utf8"));
   for (const paper of practicePapers)
     await db.query("insert into quiz_private.papers values($1,$2,$3,$4,$5)", [paper.id, paper.set, paper.module, paper.version, JSON.stringify(paper)]);
@@ -39,6 +39,13 @@ it("blocks a practice deployment or incomplete papers", async () => {
   await db.exec("update quiz_private.control set body=body || '{\"practice\":false}'::jsonb where id=1");
   await db.exec("delete from quiz_private.papers where id=(select id from quiz_private.papers limit 1)");
   await expect(checkDeploymentDatabase(query)).rejects.toThrow("all 15");
+});
+
+it("requires migration 008 and protected archive storage", async () => {
+  await db.exec("alter table quiz_private.class_archives disable row level security");
+  await expect(checkDeploymentDatabase(query)).rejects.toThrow("all eight database migrations");
+  await db.exec("alter table quiz_private.class_archives enable row level security; drop table quiz_private.class_archives");
+  await expect(checkDeploymentDatabase(query)).rejects.toThrow("all eight database migrations");
 });
 
 it("blocks browser grants even when row-level security is enabled", async () => {

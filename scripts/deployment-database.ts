@@ -7,9 +7,9 @@ export type DeploymentQuery = <Row extends Record<string, unknown>>(sql: string)
 export async function checkDeploymentDatabase(query: DeploymentQuery) {
   const tables = await query<{ tablename: string; rowsecurity: boolean }>(`
     select tablename, rowsecurity from pg_tables where schemaname='quiz_private'`);
-  const required = ["control", "profiles", "teams", "members", "attempts", "papers", "audit", "roster_teams", "roster_students"];
+  const required = ["control", "profiles", "teams", "members", "attempts", "papers", "audit", "roster_teams", "roster_students", "class_archives"];
   if (required.some(name => !tables.some(t => t.tablename === name && t.rowsecurity)))
-    throw new Error("Apply all seven database migrations; every private table must have RLS enabled.");
+    throw new Error("Apply all eight database migrations; every private table must have RLS enabled.");
   const permissions = await query<{ exposed: boolean }>(`
     select exists (
       select 1 from pg_tables t cross join (values ('anon'), ('authenticated')) r(role)
